@@ -37,7 +37,7 @@ namespace AppMachina.Unity
     {
         // ── Constants ────────────────────────────────────────────────────
 
-        internal const string SdkVersion = "3.0.0";
+        internal const string SdkVersion = "3.0.1";
 
         // ── State ────────────────────────────────────────────────────────
 
