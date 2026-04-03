@@ -1,0 +1,18 @@
+{
+  "name": "AppMachina.Unity",
+  "rootNamespace": "AppMachina.Unity",
+  "references": [],
+  "includePlatforms": [],
+  "excludePlatforms": [],
+  "allowUnsafeCode": true,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": true,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "noEngineReferences": false,
+  "internalsVisibleTo": [
+    "AppMachina.Unity.Tests.Runtime",
+    "AppMachina.Unity.Tests.Editor"
+  ]
+}

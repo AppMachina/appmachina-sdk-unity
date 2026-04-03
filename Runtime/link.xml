@@ -1,0 +1,3 @@
+<linker>
+  <assembly fullname="AppMachina.Unity" preserve="all"/>
+</linker>
