@@ -37,7 +37,7 @@ namespace AppMachina.Unity
     {
         // ── Constants ────────────────────────────────────────────────────
 
-        internal const string SdkVersion = "3.0.2";
+        internal const string SdkVersion = "3.0.3";
 
         // ── State ────────────────────────────────────────────────────────
 
@@ -1250,6 +1250,36 @@ namespace AppMachina.Unity
                     var props = result.ToEventProperties();
                     string propsJson = JsonHelper.Serialize(props);
                     _platform.Track("install_referrer", propsJson);
+
+                    // Hand any extracted click IDs to SetAttributionData so subsequent
+                    // events (app_open, purchase_success, etc.) carry them. Without this,
+                    // CAPI relay would only see click IDs on the install_referrer event,
+                    // which isn't a CAPI-mapped event.
+                    //
+                    // Merge with any previously restored / deep-link-set values so we
+                    // don't clobber a deeplinkId (or other click ID) already in effect.
+                    // The install referrer callback is asynchronous and may fire after
+                    // a deep link has already called SetAttributionData.
+                    if (!string.IsNullOrEmpty(result.Fbclid) ||
+                        !string.IsNullOrEmpty(result.Gclid) ||
+                        !string.IsNullOrEmpty(result.Ttclid) ||
+                        !string.IsNullOrEmpty(result.Msclkid))
+                    {
+                        try
+                        {
+                            SetAttributionData(
+                                deeplinkId: _deeplinkId,
+                                gclid: result.Gclid ?? _gclid,
+                                fbclid: result.Fbclid ?? _fbclid,
+                                ttclid: result.Ttclid ?? _ttclid,
+                                msclkid: result.Msclkid ?? _msclkid
+                            );
+                        }
+                        catch (Exception e)
+                        {
+                            AppMachinaLogger.LogWarning($"SetAttributionData from install referrer failed: {e.Message}");
+                        }
+                    }
 
                     if (_config != null && _config.EnableDebug)
                     {

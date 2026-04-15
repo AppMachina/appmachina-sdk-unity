@@ -273,7 +273,18 @@ namespace AppMachina.Unity
                             UtmCampaign = parsed.GetValueOrDefault("utm_campaign"),
                             UtmContent = parsed.GetValueOrDefault("utm_content"),
                             UtmTerm = parsed.GetValueOrDefault("utm_term"),
-                            Gclid = parsed.GetValueOrDefault("gclid")
+                            Gclid = parsed.GetValueOrDefault("gclid"),
+                            Fbclid = parsed.GetValueOrDefault("fbclid"),
+                            Ttclid = parsed.GetValueOrDefault("ttclid"),
+                            Twclid = parsed.GetValueOrDefault("twclid"),
+                            Msclkid = parsed.GetValueOrDefault("msclkid"),
+                            Gbraid = parsed.GetValueOrDefault("gbraid"),
+                            Wbraid = parsed.GetValueOrDefault("wbraid"),
+                            Rclid = parsed.GetValueOrDefault("rclid"),
+                            LiFatId = parsed.GetValueOrDefault("li_fat_id"),
+                            Sclid = parsed.GetValueOrDefault("sclid"),
+                            Irclickid = parsed.GetValueOrDefault("irclickid"),
+                            ClickId = parsed.GetValueOrDefault("click_id")
                         };
 
                         // Mark as collected so we don't fetch again
@@ -573,11 +584,25 @@ namespace AppMachina.Unity
 
         /// <summary>
         /// All attribution parameters recognized by ParseReferrer().
-        /// Matches the Kotlin SDK's InstallReferrerTracker.ATTRIBUTION_PARAMS.
+        /// Keep in sync with Kotlin InstallReferrerTracker.ATTRIBUTION_PARAMS and
+        /// layers sdk-ingest routes/click.ts::buildAndroidReferrerUrl.
         /// </summary>
         private static readonly HashSet<string> AttributionParams = new HashSet<string>
         {
-            "gclid", "utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term"
+            // UTM
+            "utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term",
+            // Ad platform click IDs
+            "gclid", "gbraid", "wbraid",   // Google
+            "fbclid",                        // Meta
+            "ttclid",                        // TikTok
+            "twclid",                        // X
+            "msclkid",                       // Microsoft
+            "li_fat_id",                     // LinkedIn
+            "sclid",                         // Snapchat
+            "rclid",                         // Reddit
+            "irclickid",                     // Impact
+            // Layers click_id (primary key of sdk_clicks)
+            "click_id"
         };
 
         private static bool IsAttributionParam(string key)
@@ -659,6 +684,39 @@ namespace AppMachina.Unity
         /// <summary>Google Click Identifier, or null.</summary>
         public string Gclid { get; set; }
 
+        /// <summary>Facebook/Meta Click Identifier, or null.</summary>
+        public string Fbclid { get; set; }
+
+        /// <summary>TikTok Click Identifier, or null.</summary>
+        public string Ttclid { get; set; }
+
+        /// <summary>X (Twitter) Click Identifier, or null.</summary>
+        public string Twclid { get; set; }
+
+        /// <summary>Microsoft Click Identifier, or null.</summary>
+        public string Msclkid { get; set; }
+
+        /// <summary>Google iOS web-to-app identifier (gbraid), or null.</summary>
+        public string Gbraid { get; set; }
+
+        /// <summary>Google web-to-app identifier (wbraid), or null.</summary>
+        public string Wbraid { get; set; }
+
+        /// <summary>Reddit Click Identifier, or null.</summary>
+        public string Rclid { get; set; }
+
+        /// <summary>LinkedIn Click Identifier, or null.</summary>
+        public string LiFatId { get; set; }
+
+        /// <summary>Snapchat Click Identifier, or null.</summary>
+        public string Sclid { get; set; }
+
+        /// <summary>Impact Radius Click Identifier, or null.</summary>
+        public string Irclickid { get; set; }
+
+        /// <summary>Layers click_id (primary key of sdk_clicks), or null.</summary>
+        public string ClickId { get; set; }
+
         /// <summary>
         /// Convert to a properties dictionary suitable for tracking as an install_referrer event.
         /// Matches the Kotlin SDK's InstallReferrerTracker event format.
@@ -682,6 +740,17 @@ namespace AppMachina.Unity
             if (!string.IsNullOrEmpty(UtmContent)) props["utm_content"] = UtmContent;
             if (!string.IsNullOrEmpty(UtmTerm)) props["utm_term"] = UtmTerm;
             if (!string.IsNullOrEmpty(Gclid)) props["gclid"] = Gclid;
+            if (!string.IsNullOrEmpty(Fbclid)) props["fbclid"] = Fbclid;
+            if (!string.IsNullOrEmpty(Ttclid)) props["ttclid"] = Ttclid;
+            if (!string.IsNullOrEmpty(Twclid)) props["twclid"] = Twclid;
+            if (!string.IsNullOrEmpty(Msclkid)) props["msclkid"] = Msclkid;
+            if (!string.IsNullOrEmpty(Gbraid)) props["gbraid"] = Gbraid;
+            if (!string.IsNullOrEmpty(Wbraid)) props["wbraid"] = Wbraid;
+            if (!string.IsNullOrEmpty(Rclid)) props["rclid"] = Rclid;
+            if (!string.IsNullOrEmpty(LiFatId)) props["li_fat_id"] = LiFatId;
+            if (!string.IsNullOrEmpty(Sclid)) props["sclid"] = Sclid;
+            if (!string.IsNullOrEmpty(Irclickid)) props["irclickid"] = Irclickid;
+            if (!string.IsNullOrEmpty(ClickId)) props["click_id"] = ClickId;
 
             return props;
         }
