@@ -212,16 +212,19 @@ namespace AppMachina.Unity
             }
 
             string propsJson = JsonHelper.Serialize(props);
+            // Emit the canonical $-prefixed system event introduced in Tier 1
+            // (see schema/PROTOCOL.md). The legacy non-prefixed `deep_link_opened`
+            // remains in StandardEvents.DeepLink for backward-compat lookups.
             string error = NativeStringHelper.ProcessResult(
-                NativeBindings.appmachina_track("deep_link_opened", propsJson));
+                NativeBindings.appmachina_track(StandardEvents.AppMachinaDeepLinkOpened, propsJson));
 
             if (error != null && s_enableDebug)
             {
-                Debug.LogWarning($"[AppMachina] deep_link_opened track failed: {error}");
+                Debug.LogWarning($"[AppMachina] $deep_link_opened track failed: {error}");
             }
             else if (s_enableDebug)
             {
-                Debug.Log($"[AppMachina] auto-tracked deep_link_opened: {data.RawUrl}");
+                Debug.Log($"[AppMachina] auto-tracked $deep_link_opened: {data.RawUrl}");
             }
         }
 

@@ -94,6 +94,9 @@ namespace AppMachina.Unity.Internal
         [DllImport("__Internal")]
         internal static extern IntPtr AppMachinaWebGL_GetSessionId();
 
+        [DllImport("__Internal")]
+        internal static extern IntPtr AppMachinaWebGL_GetDebugToken();
+
         // ── Remote Config ──────────────────────────────────────────────
 
         [DllImport("__Internal")]
@@ -154,6 +157,99 @@ namespace AppMachina.Unity.Internal
 
         [DllImport("__Internal")]
         internal static extern IntPtr AppMachinaWebGL_GetPlatformOS();
+
+        // ── Tier 1: Super-properties ───────────────────────────────────
+
+        [DllImport("__Internal")]
+        internal static extern void AppMachinaWebGL_SetSuperProperties(string propertiesJson);
+
+        [DllImport("__Internal")]
+        internal static extern void AppMachinaWebGL_SetSuperPropertiesOnce(string propertiesJson);
+
+        [DllImport("__Internal")]
+        internal static extern void AppMachinaWebGL_UnregisterSuperProperty(string key);
+
+        [DllImport("__Internal")]
+        internal static extern void AppMachinaWebGL_ClearSuperProperties();
+
+        [DllImport("__Internal")]
+        internal static extern IntPtr AppMachinaWebGL_GetSuperPropertiesJson();
+
+        // ── Tier 1: Timed events ───────────────────────────────────────
+
+        [DllImport("__Internal")]
+        internal static extern void AppMachinaWebGL_TimeEvent(string eventName);
+
+        [DllImport("__Internal")]
+        internal static extern double AppMachinaWebGL_CancelTimedEvent(string eventName);
+
+        // ── Tier 1: Multi-group ────────────────────────────────────────
+
+        [DllImport("__Internal")]
+        internal static extern void AppMachinaWebGL_SetGroup(string groupType, string groupId);
+
+        [DllImport("__Internal")]
+        internal static extern void AppMachinaWebGL_AddGroup(string groupType, string groupId);
+
+        [DllImport("__Internal")]
+        internal static extern void AppMachinaWebGL_RemoveGroup(string groupType);
+
+        [DllImport("__Internal")]
+        internal static extern IntPtr AppMachinaWebGL_GetGroupsJson();
+
+        // ── Tier 1: User-property mutators ─────────────────────────────
+
+        [DllImport("__Internal")]
+        internal static extern void AppMachinaWebGL_Increment(string key, double delta);
+
+        [DllImport("__Internal")]
+        internal static extern void AppMachinaWebGL_Append(string key, string valueJson);
+
+        [DllImport("__Internal")]
+        internal static extern void AppMachinaWebGL_Union(string key, string valuesJson);
+
+        [DllImport("__Internal")]
+        internal static extern void AppMachinaWebGL_Unset(string key);
+
+        // ── Tier 1: Identity reset + ID accessors ──────────────────────
+
+        [DllImport("__Internal")]
+        internal static extern void AppMachinaWebGL_Reset();
+
+        [DllImport("__Internal")]
+        internal static extern IntPtr AppMachinaWebGL_GetDeviceId();
+
+        [DllImport("__Internal")]
+        internal static extern IntPtr AppMachinaWebGL_GetAnonymousId();
+
+        [DllImport("__Internal")]
+        internal static extern uint AppMachinaWebGL_GetSessionNumber();
+
+        [DllImport("__Internal")]
+        internal static extern IntPtr AppMachinaWebGL_GetFirstOpenTime();
+
+        // ── Tier 4: Feature flags ──────────────────────────────────────
+
+        [DllImport("__Internal")]
+        internal static extern IntPtr AppMachinaWebGL_GetFeatureFlag(string flagKey);
+
+        [DllImport("__Internal")]
+        internal static extern int AppMachinaWebGL_IsFeatureEnabled(string flagKey);
+
+        [DllImport("__Internal")]
+        internal static extern IntPtr AppMachinaWebGL_GetFeatureFlagPayload(string flagKey);
+
+        [DllImport("__Internal")]
+        internal static extern IntPtr AppMachinaWebGL_GetAllFlagsJson();
+
+        [DllImport("__Internal")]
+        internal static extern int AppMachinaWebGL_ReloadFeatureFlags();
+
+        [DllImport("__Internal")]
+        internal static extern void AppMachinaWebGL_SetPersonPropertiesForFlags(string propertiesJson);
+
+        [DllImport("__Internal")]
+        internal static extern void AppMachinaWebGL_SetFeatureFlagBootstrap(string bootstrapJson);
     }
 #endif
 }

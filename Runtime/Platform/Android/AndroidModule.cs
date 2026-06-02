@@ -348,6 +348,144 @@ namespace AppMachina.Unity
         }
 #endif
 
+        // ── Device Info ────────────────────────────────────────────────
+
+        /// <summary>
+        /// Get the Android release version (e.g. "13", "14"). Read from
+        /// android.os.Build.VERSION.RELEASE — the bare dotted-decimal that
+        /// matches the format other SDKs send. Returns null if the JNI call
+        /// fails.
+        ///
+        /// Do NOT compose this with SDK_INT or FINGERPRINT — that is what
+        /// Unity's SystemInfo.operatingSystem does, and the resulting verbose
+        /// string ("Android OS 13 / API-33 (TP1A.220624.014/...)") fails
+        /// downstream validation in Meta CAPI and TikTok CAPI.
+        /// </summary>
+        public static string GetOsVersion()
+        {
+#if UNITY_ANDROID && !UNITY_EDITOR
+            try
+            {
+                using (var versionClass = new AndroidJavaClass("android.os.Build$VERSION"))
+                {
+                    return versionClass.GetStatic<string>("RELEASE");
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[{Tag}] OS version read failed: {e.Message}");
+                return null;
+            }
+#else
+            return null;
+#endif
+        }
+
+        /// <summary>
+        /// Get the device model string formatted as "Manufacturer Model"
+        /// (e.g. "samsung SM-G991B"). Returns null if the JNI call fails.
+        /// </summary>
+        public static string GetDeviceModel()
+        {
+#if UNITY_ANDROID && !UNITY_EDITOR
+            try
+            {
+                using (var buildClass = new AndroidJavaClass("android.os.Build"))
+                {
+                    string manufacturer = buildClass.GetStatic<string>("MANUFACTURER");
+                    string model = buildClass.GetStatic<string>("MODEL");
+
+                    if (string.IsNullOrEmpty(manufacturer) && string.IsNullOrEmpty(model))
+                        return null;
+                    if (string.IsNullOrEmpty(manufacturer))
+                        return model;
+                    if (string.IsNullOrEmpty(model))
+                        return manufacturer;
+                    // If the model already starts with the manufacturer name
+                    // (e.g. "Google Pixel 7"), avoid the duplicate prefix.
+                    if (model.StartsWith(manufacturer, StringComparison.OrdinalIgnoreCase))
+                        return model;
+                    return $"{manufacturer} {model}";
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[{Tag}] Device model read failed: {e.Message}");
+                return null;
+            }
+#else
+            return null;
+#endif
+        }
+
+        /// <summary>
+        /// Get the app's user-facing version string from PackageInfo.versionName
+        /// (e.g. "1.0.5"). Returns null if the PackageManager call fails.
+        /// </summary>
+        public static string GetAppVersion()
+        {
+#if UNITY_ANDROID && !UNITY_EDITOR
+            try
+            {
+                using (var unityPlayer = new AndroidJavaClass("com.unity3d.player.UnityPlayer"))
+                using (var activity = unityPlayer.GetStatic<AndroidJavaObject>("currentActivity"))
+                using (var context = activity.Call<AndroidJavaObject>("getApplicationContext"))
+                using (var pm = context.Call<AndroidJavaObject>("getPackageManager"))
+                {
+                    string packageName = context.Call<string>("getPackageName");
+                    using (var info = pm.Call<AndroidJavaObject>("getPackageInfo", packageName, 0))
+                    {
+                        return info.Get<string>("versionName");
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[{Tag}] App version read failed: {e.Message}");
+                return null;
+            }
+#else
+            return null;
+#endif
+        }
+
+        /// <summary>
+        /// Get the app's build code from PackageInfo.versionCode (e.g. "1050").
+        /// Distinct from versionName — sending the same value for both fields
+        /// loses the build-code dimension downstream. Returns null if the
+        /// PackageManager call fails.
+        /// </summary>
+        public static string GetBuildNumber()
+        {
+#if UNITY_ANDROID && !UNITY_EDITOR
+            try
+            {
+                using (var unityPlayer = new AndroidJavaClass("com.unity3d.player.UnityPlayer"))
+                using (var activity = unityPlayer.GetStatic<AndroidJavaObject>("currentActivity"))
+                using (var context = activity.Call<AndroidJavaObject>("getApplicationContext"))
+                using (var pm = context.Call<AndroidJavaObject>("getPackageManager"))
+                {
+                    string packageName = context.Call<string>("getPackageName");
+                    using (var info = pm.Call<AndroidJavaObject>("getPackageInfo", packageName, 0))
+                    {
+                        // versionCode is an int; convert via String.valueOf to
+                        // get a stable decimal representation regardless of
+                        // locale or culture.
+                        int code = info.Get<int>("versionCode");
+                        return code.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[{Tag}] Build number read failed: {e.Message}");
+                return null;
+            }
+#else
+            return null;
+#endif
+        }
+
         // ── Install ID ─────────────────────────────────────────────────
 
         /// <summary>

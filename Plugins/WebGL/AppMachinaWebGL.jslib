@@ -459,6 +459,36 @@ var AppMachinaWebGLPlugin = {
           AppMachinaState.wasm.setConsent(entry.args[0]);
         } else if (entry.method === 'setDeviceContext') {
           AppMachinaState.wasm.setDeviceContext(entry.args[0]);
+        } else if (entry.method === 'setSuperProperties') {
+          AppMachinaState.wasm.setSuperProperties(entry.args[0]);
+        } else if (entry.method === 'setSuperPropertiesOnce') {
+          AppMachinaState.wasm.setSuperPropertiesOnce(entry.args[0]);
+        } else if (entry.method === 'unregisterSuperProperty') {
+          AppMachinaState.wasm.unregisterSuperProperty(entry.args[0]);
+        } else if (entry.method === 'clearSuperProperties') {
+          AppMachinaState.wasm.clearSuperProperties();
+        } else if (entry.method === 'timeEvent') {
+          AppMachinaState.wasm.timeEvent(entry.args[0]);
+        } else if (entry.method === 'setGroup') {
+          AppMachinaState.wasm.setGroup(entry.args[0], entry.args[1]);
+        } else if (entry.method === 'addGroup') {
+          AppMachinaState.wasm.addGroup(entry.args[0], entry.args[1]);
+        } else if (entry.method === 'removeGroup') {
+          AppMachinaState.wasm.removeGroup(entry.args[0]);
+        } else if (entry.method === 'increment') {
+          AppMachinaState.wasm.increment(entry.args[0], entry.args[1]);
+        } else if (entry.method === 'append') {
+          AppMachinaState.wasm.append(entry.args[0], entry.args[1]);
+        } else if (entry.method === 'union') {
+          AppMachinaState.wasm.union(entry.args[0], entry.args[1]);
+        } else if (entry.method === 'unset') {
+          AppMachinaState.wasm.unset(entry.args[0]);
+        } else if (entry.method === 'reset') {
+          AppMachinaState.wasm.reset();
+        } else if (entry.method === 'setPersonPropertiesForFlags') {
+          AppMachinaState.wasm.setPersonPropertiesForFlags(entry.args[0]);
+        } else if (entry.method === 'setFeatureFlagBootstrap') {
+          AppMachinaState.wasm.setFeatureFlagBootstrap(entry.args[0]);
         }
       } catch (e) {
         if (AppMachinaState.config && AppMachinaState.config.enable_debug) {
@@ -594,6 +624,161 @@ var AppMachinaWebGLPlugin = {
     }
   },
 
+  // ── Tier 5: Exception auto-capture (window.onerror, unhandledrejection) ─
+  //
+  // Mirrors @appmachina/client's installExceptionAutoCapture (PR #138):
+  // emits $exception events with $exception_* properties for every
+  // window.error and window.unhandledrejection. Strings/values are
+  // truncated to keep payloads bounded:
+  //   $exception_message  ≤ 4 KB
+  //   $exception_stack    ≤ 10 KB
+  //   coerced reasons     ≤ 1 KB
+
+  $AppMachinaTruncate: function (s, max) {
+    if (s == null) return '';
+    var str = '' + s;
+    if (str.length <= max) return str;
+    return str.substring(0, max);
+  },
+
+  $AppMachinaCoerceRejection: function (reason) {
+    // Mirror packages/client/src/exceptions.ts coercion: errors map to
+    // their stack/message; non-error reasons get a stable shape.
+    if (reason && reason instanceof Error) {
+      return {
+        type: reason.name || 'Error',
+        message: AppMachinaTruncate(reason.message || '', 4000),
+        stack: AppMachinaTruncate(reason.stack || '', 10000)
+      };
+    }
+    if (typeof reason === 'string') {
+      return { type: 'unhandledrejection', message: AppMachinaTruncate(reason, 4000), stack: '' };
+    }
+    if (reason == null) {
+      return { type: 'unhandledrejection', message: '' + reason, stack: '' };
+    }
+    var msg;
+    try {
+      msg = AppMachinaTruncate(JSON.stringify(reason), 1000);
+    } catch (e) {
+      msg = AppMachinaTruncate('' + reason, 1000);
+    }
+    return { type: 'unhandledrejection', message: msg, stack: '' };
+  },
+
+  $AppMachinaTrackException: function (props) {
+    if (AppMachinaState.isShutDown || !AppMachinaState.wasm) return;
+    try {
+      AppMachinaState.wasm.track('$exception', props, null, null);
+      var threshold = (AppMachinaState.config && AppMachinaState.config.flush_threshold) || 20;
+      if (AppMachinaState.wasm.queueDepth() >= threshold) {
+        AppMachinaFlushViaFetch();
+      }
+    } catch (e) {
+      // Never let our own tracking failure escape — that re-enters via
+      // window.onerror and recurses.
+      if (AppMachinaState.config && AppMachinaState.config.enable_debug) {
+        console.warn('[AppMachina] $exception emit failed:', e);
+      }
+    }
+  },
+
+  $AppMachinaSetupExceptionListeners: function () {
+    if (typeof window === 'undefined') return;
+
+    AppMachinaState.errorListener = function (event) {
+      // Cross-origin "Script error." events have null `event.error` —
+      // fall back to event.message so we still capture something.
+      var err = event && event.error;
+      var typeName = (err && err.name) || 'Error';
+      var message = (err && err.message) || (event && event.message) || 'Unknown error';
+      var stack = (err && err.stack) || '';
+      var props = {
+        $exception_type: typeName,
+        $exception_message: AppMachinaTruncate(message, 4000),
+        $exception_stack: AppMachinaTruncate(stack, 10000),
+        $exception_handled: false,
+        $exception_promise_rejection: false
+      };
+      if (event && event.filename) props['$exception_source'] = event.filename;
+      if (event && event.lineno > 0) props['$exception_lineno'] = event.lineno;
+      if (event && event.colno > 0) props['$exception_colno'] = event.colno;
+      AppMachinaTrackException(props);
+    };
+
+    AppMachinaState.rejectionListener = function (event) {
+      var coerced = AppMachinaCoerceRejection(event && event.reason);
+      AppMachinaTrackException({
+        $exception_type: coerced.type,
+        $exception_message: coerced.message,
+        $exception_stack: coerced.stack,
+        $exception_handled: false,
+        $exception_promise_rejection: true
+      });
+    };
+
+    window.addEventListener('error', AppMachinaState.errorListener);
+    window.addEventListener('unhandledrejection', AppMachinaState.rejectionListener);
+  },
+
+  $AppMachinaCleanupExceptionListeners: function () {
+    if (typeof window === 'undefined') return;
+    if (AppMachinaState.errorListener) {
+      window.removeEventListener('error', AppMachinaState.errorListener);
+      AppMachinaState.errorListener = null;
+    }
+    if (AppMachinaState.rejectionListener) {
+      window.removeEventListener('unhandledrejection', AppMachinaState.rejectionListener);
+      AppMachinaState.rejectionListener = null;
+    }
+  },
+
+  // ── Tier 6: Performance auto-capture ────────────────────────────────────
+  //
+  // Emits a $performance event on first wire-up with browser navigation
+  // timings (DOMContentLoaded, load, first-byte). Custom traces from C#
+  // arrive via AppMachinaWebGL_EmitPerformanceTrace below.
+
+  $AppMachinaEmitNavTiming: function () {
+    if (typeof performance === 'undefined' || !performance.timing) return;
+    if (AppMachinaState.isShutDown || !AppMachinaState.wasm) return;
+    try {
+      var t = performance.timing;
+      // performance.timing is fixed-origin (ms since epoch). Subtract
+      // navigationStart to get app-relative offsets.
+      var navStart = t.navigationStart || 0;
+      if (navStart === 0) return;
+      var props = {};
+      if (t.domContentLoadedEventEnd) {
+        props['$dom_content_loaded_ms'] = t.domContentLoadedEventEnd - navStart;
+      }
+      if (t.loadEventEnd) {
+        props['$load_event_ms'] = t.loadEventEnd - navStart;
+      }
+      if (t.responseStart) {
+        props['$ttfb_ms'] = t.responseStart - navStart;
+      }
+      // performance.now() approximates "app start to now" in WebGL —
+      // matches the C# Time.realtimeSinceStartup * 1000 semantics.
+      if (typeof performance.now === 'function') {
+        props['$app_start_ms'] = performance.now();
+      }
+      // Skip the emit if we couldn't extract anything meaningful.
+      var hasAny = false;
+      for (var _ in props) {
+        hasAny = true;
+        break;
+      }
+      if (!hasAny) return;
+
+      AppMachinaState.wasm.track('$performance', props, null, null);
+    } catch (e) {
+      if (AppMachinaState.config && AppMachinaState.config.enable_debug) {
+        console.warn('[AppMachina] $performance nav-timing emit failed:', e);
+      }
+    }
+  },
+
   // ══════════════════════════════════════════════════════════════════════
   // EXPORTED FUNCTIONS (called from C# via [DllImport("__Internal")])
   // ══════════════════════════════════════════════════════════════════════
@@ -696,6 +881,30 @@ var AppMachinaWebGLPlugin = {
     // Setup lifecycle listeners (these don't require WASM — they handle
     // visibility/online events and are needed from the start)
     AppMachinaSetupListeners();
+
+    // Tier 5: install window.error + unhandledrejection listeners
+    // (opt-out via auto_track_exceptions=false in the config JSON).
+    if (config.auto_track_exceptions !== false) {
+      AppMachinaSetupExceptionListeners();
+    }
+
+    // Tier 6: emit a one-shot $performance event with browser navigation
+    // timings. Defer until after WASM is ready so the event lands in the
+    // real queue rather than the pre-init buffer.
+    if (config.auto_track_performance !== false) {
+      // Wire it up to fire after WASM loads. AppMachinaLoadWasm resolves
+      // wasmReady; we poll briefly to catch it.
+      var navTimingTimer = setInterval(function () {
+        if (AppMachinaState.wasm) {
+          clearInterval(navTimingTimer);
+          AppMachinaEmitNavTiming();
+        }
+      }, 100);
+      // Stop polling after 10s regardless — bounds memory if WASM never loads.
+      setTimeout(function () {
+        clearInterval(navTimingTimer);
+      }, 10000);
+    }
   },
 
   // ── Event Tracking ────────────────────────────────────────────────────
@@ -1055,6 +1264,18 @@ var AppMachinaWebGLPlugin = {
     }
   },
 
+  AppMachinaWebGL_GetDebugToken: function () {
+    if (!AppMachinaState.wasm) return 0;
+    try {
+      // Rust core's debugToken() returns null when debug mode is off.
+      var token = AppMachinaState.wasm.debugToken();
+      if (token === null || token === undefined) return 0;
+      return AppMachinaAllocString(token);
+    } catch (e) {
+      return 0;
+    }
+  },
+
   // ── Remote Config ─────────────────────────────────────────────────────
 
   AppMachinaWebGL_GetRemoteConfigJson: function () {
@@ -1100,6 +1321,7 @@ var AppMachinaWebGLPlugin = {
 
     // Cleanup listeners
     AppMachinaCleanupListeners();
+    AppMachinaCleanupExceptionListeners();
 
     // Last-chance flush via sendBeacon
     if (AppMachinaState.wasm) {
@@ -1270,6 +1492,512 @@ var AppMachinaWebGLPlugin = {
     if (ua.indexOf('iPhone') >= 0 || ua.indexOf('iPad') >= 0) return AppMachinaAllocString('iOS');
     if (ua.indexOf('Linux') >= 0) return AppMachinaAllocString('Linux');
     return AppMachinaAllocString('WebGL');
+  },
+
+  // ── Tier 5/6 — manual reporting from C# ─────────────────────────────────
+
+  // Manually report an exception from C#. Used by AppMachinaSDK.TrackException
+  // on WebGL when the C# code wants to flag a caught exception even though
+  // the JS-side window.error / unhandledrejection handlers cover the
+  // uncaught path automatically.
+  AppMachinaWebGL_TrackException: function (typeNamePtr, messagePtr, stackPtr, handled) {
+    if (AppMachinaState.isShutDown || !AppMachinaState.wasm) return;
+    var typeName = typeNamePtr ? UTF8ToString(typeNamePtr) : 'Error';
+    var message = messagePtr ? UTF8ToString(messagePtr) : '';
+    var stack = stackPtr ? UTF8ToString(stackPtr) : '';
+    AppMachinaTrackException({
+      $exception_type: typeName,
+      $exception_message: AppMachinaTruncate(message, 4000),
+      $exception_stack: AppMachinaTruncate(stack, 10000),
+      $exception_handled: handled !== 0,
+      $exception_promise_rejection: false
+    });
+  },
+
+  // Emit a custom $performance_trace event from C#. C# owns the
+  // Stopwatch.GetTimestamp() ticks → ms conversion so this just forwards.
+  AppMachinaWebGL_EmitPerformanceTrace: function (namePtr, durationMs, metadataJsonPtr) {
+    if (AppMachinaState.isShutDown || !AppMachinaState.wasm) return;
+    var name = namePtr ? UTF8ToString(namePtr) : '';
+    if (!name) return;
+    var props = { $trace_name: name, $duration_ms: durationMs };
+    if (metadataJsonPtr) {
+      try {
+        var meta = JSON.parse(UTF8ToString(metadataJsonPtr));
+        if (meta && typeof meta === 'object') {
+          for (var k in meta) {
+            if (k === '$trace_name' || k === '$duration_ms') continue;
+            props[k] = meta[k];
+          }
+        }
+      } catch (e) {
+        // Ignore malformed metadata — emit the trace without it.
+      }
+    }
+    try {
+      AppMachinaState.wasm.track('$performance_trace', props, null, null);
+    } catch (e) {
+      if (AppMachinaState.config && AppMachinaState.config.enable_debug) {
+        console.warn('[AppMachina] $performance_trace emit failed:', e);
+      }
+    }
+  },
+
+  // ── Tier 1: Super-properties ──────────────────────────────────────────
+  // Forward to the WASM core's super_properties APIs. Pre-init queueing
+  // mirrors the existing track/screen pattern so that calls made before
+  // the WASM module is ready are replayed once it loads.
+
+  AppMachinaWebGL_SetSuperProperties: function (propertiesJsonPtr) {
+    if (AppMachinaState.isShutDown) return;
+    var propsJson = UTF8ToString(propertiesJsonPtr);
+    if (!AppMachinaState.wasm) {
+      if (AppMachinaState.preInitQueue.length < AppMachinaState.PRE_INIT_MAX) {
+        var p = {};
+        try {
+          p = JSON.parse(propsJson);
+        } catch (e) {}
+        AppMachinaState.preInitQueue.push({ method: 'setSuperProperties', args: [p] });
+      }
+      return;
+    }
+    try {
+      AppMachinaState.wasm.setSuperProperties(JSON.parse(propsJson));
+    } catch (e) {
+      if (AppMachinaState.config && AppMachinaState.config.enable_debug) {
+        console.warn('[AppMachina] WebGL setSuperProperties failed:', e);
+      }
+    }
+  },
+
+  AppMachinaWebGL_SetSuperPropertiesOnce: function (propertiesJsonPtr) {
+    if (AppMachinaState.isShutDown) return;
+    var propsJson = UTF8ToString(propertiesJsonPtr);
+    if (!AppMachinaState.wasm) {
+      if (AppMachinaState.preInitQueue.length < AppMachinaState.PRE_INIT_MAX) {
+        var p = {};
+        try {
+          p = JSON.parse(propsJson);
+        } catch (e) {}
+        AppMachinaState.preInitQueue.push({ method: 'setSuperPropertiesOnce', args: [p] });
+      }
+      return;
+    }
+    try {
+      AppMachinaState.wasm.setSuperPropertiesOnce(JSON.parse(propsJson));
+    } catch (e) {
+      if (AppMachinaState.config && AppMachinaState.config.enable_debug) {
+        console.warn('[AppMachina] WebGL setSuperPropertiesOnce failed:', e);
+      }
+    }
+  },
+
+  AppMachinaWebGL_UnregisterSuperProperty: function (keyPtr) {
+    if (AppMachinaState.isShutDown) return;
+    var key = UTF8ToString(keyPtr);
+    if (!AppMachinaState.wasm) {
+      if (AppMachinaState.preInitQueue.length < AppMachinaState.PRE_INIT_MAX) {
+        AppMachinaState.preInitQueue.push({ method: 'unregisterSuperProperty', args: [key] });
+      }
+      return;
+    }
+    try {
+      AppMachinaState.wasm.unregisterSuperProperty(key);
+    } catch (e) {
+      if (AppMachinaState.config && AppMachinaState.config.enable_debug) {
+        console.warn('[AppMachina] WebGL unregisterSuperProperty failed:', e);
+      }
+    }
+  },
+
+  AppMachinaWebGL_ClearSuperProperties: function () {
+    if (AppMachinaState.isShutDown) return;
+    if (!AppMachinaState.wasm) {
+      if (AppMachinaState.preInitQueue.length < AppMachinaState.PRE_INIT_MAX) {
+        AppMachinaState.preInitQueue.push({ method: 'clearSuperProperties', args: [] });
+      }
+      return;
+    }
+    try {
+      AppMachinaState.wasm.clearSuperProperties();
+    } catch (e) {
+      if (AppMachinaState.config && AppMachinaState.config.enable_debug) {
+        console.warn('[AppMachina] WebGL clearSuperProperties failed:', e);
+      }
+    }
+  },
+
+  AppMachinaWebGL_GetSuperPropertiesJson: function () {
+    if (!AppMachinaState.wasm) return AppMachinaAllocString('{}');
+    try {
+      var v = AppMachinaState.wasm.getSuperProperties();
+      return AppMachinaAllocString(JSON.stringify(v || {}));
+    } catch (e) {
+      return AppMachinaAllocString('{}');
+    }
+  },
+
+  // ── Tier 1: Timed events ──────────────────────────────────────────────
+
+  AppMachinaWebGL_TimeEvent: function (eventNamePtr) {
+    if (AppMachinaState.isShutDown) return;
+    var name = UTF8ToString(eventNamePtr);
+    if (!AppMachinaState.wasm) {
+      if (AppMachinaState.preInitQueue.length < AppMachinaState.PRE_INIT_MAX) {
+        AppMachinaState.preInitQueue.push({ method: 'timeEvent', args: [name] });
+      }
+      return;
+    }
+    try {
+      AppMachinaState.wasm.timeEvent(name);
+    } catch (e) {
+      if (AppMachinaState.config && AppMachinaState.config.enable_debug) {
+        console.warn('[AppMachina] WebGL timeEvent failed:', e);
+      }
+    }
+  },
+
+  AppMachinaWebGL_CancelTimedEvent: function (eventNamePtr) {
+    if (!AppMachinaState.wasm) return 0;
+    var name = UTF8ToString(eventNamePtr);
+    try {
+      // wasm-bindgen returns BigInt for u64; coerce to Number for the
+      // C# double return type. Values exceed 2^53 only after ~285,000 years.
+      var result = AppMachinaState.wasm.cancelTimedEvent(name);
+      return Number(result);
+    } catch (e) {
+      return 0;
+    }
+  },
+
+  // ── Tier 1: Multi-group ───────────────────────────────────────────────
+
+  AppMachinaWebGL_SetGroup: function (groupTypePtr, groupIdPtr) {
+    if (AppMachinaState.isShutDown) return;
+    var t = UTF8ToString(groupTypePtr);
+    var id = groupIdPtr ? UTF8ToString(groupIdPtr) : '';
+    if (!AppMachinaState.wasm) {
+      if (AppMachinaState.preInitQueue.length < AppMachinaState.PRE_INIT_MAX) {
+        AppMachinaState.preInitQueue.push({ method: 'setGroup', args: [t, id] });
+      }
+      return;
+    }
+    try {
+      AppMachinaState.wasm.setGroup(t, id);
+    } catch (e) {
+      if (AppMachinaState.config && AppMachinaState.config.enable_debug) {
+        console.warn('[AppMachina] WebGL setGroup failed:', e);
+      }
+    }
+  },
+
+  AppMachinaWebGL_AddGroup: function (groupTypePtr, groupIdPtr) {
+    if (AppMachinaState.isShutDown) return;
+    var t = UTF8ToString(groupTypePtr);
+    var id = groupIdPtr ? UTF8ToString(groupIdPtr) : '';
+    if (!AppMachinaState.wasm) {
+      if (AppMachinaState.preInitQueue.length < AppMachinaState.PRE_INIT_MAX) {
+        AppMachinaState.preInitQueue.push({ method: 'addGroup', args: [t, id] });
+      }
+      return;
+    }
+    try {
+      AppMachinaState.wasm.addGroup(t, id);
+    } catch (e) {
+      if (AppMachinaState.config && AppMachinaState.config.enable_debug) {
+        console.warn('[AppMachina] WebGL addGroup failed:', e);
+      }
+    }
+  },
+
+  AppMachinaWebGL_RemoveGroup: function (groupTypePtr) {
+    if (AppMachinaState.isShutDown) return;
+    var t = UTF8ToString(groupTypePtr);
+    if (!AppMachinaState.wasm) {
+      if (AppMachinaState.preInitQueue.length < AppMachinaState.PRE_INIT_MAX) {
+        AppMachinaState.preInitQueue.push({ method: 'removeGroup', args: [t] });
+      }
+      return;
+    }
+    try {
+      AppMachinaState.wasm.removeGroup(t);
+    } catch (e) {
+      if (AppMachinaState.config && AppMachinaState.config.enable_debug) {
+        console.warn('[AppMachina] WebGL removeGroup failed:', e);
+      }
+    }
+  },
+
+  AppMachinaWebGL_GetGroupsJson: function () {
+    if (!AppMachinaState.wasm) return AppMachinaAllocString('{}');
+    try {
+      var v = AppMachinaState.wasm.getGroups();
+      return AppMachinaAllocString(JSON.stringify(v || {}));
+    } catch (e) {
+      return AppMachinaAllocString('{}');
+    }
+  },
+
+  // ── Tier 1: User-property mutators ────────────────────────────────────
+
+  AppMachinaWebGL_Increment: function (keyPtr, delta) {
+    if (AppMachinaState.isShutDown) return;
+    var k = UTF8ToString(keyPtr);
+    if (!AppMachinaState.wasm) {
+      if (AppMachinaState.preInitQueue.length < AppMachinaState.PRE_INIT_MAX) {
+        AppMachinaState.preInitQueue.push({ method: 'increment', args: [k, delta] });
+      }
+      return;
+    }
+    try {
+      AppMachinaState.wasm.increment(k, delta);
+    } catch (e) {
+      if (AppMachinaState.config && AppMachinaState.config.enable_debug) {
+        console.warn('[AppMachina] WebGL increment failed:', e);
+      }
+    }
+  },
+
+  AppMachinaWebGL_Append: function (keyPtr, valueJsonPtr) {
+    if (AppMachinaState.isShutDown) return;
+    var k = UTF8ToString(keyPtr);
+    var json = UTF8ToString(valueJsonPtr);
+    if (!AppMachinaState.wasm) {
+      if (AppMachinaState.preInitQueue.length < AppMachinaState.PRE_INIT_MAX) {
+        var v = null;
+        try {
+          v = JSON.parse(json);
+        } catch (e) {}
+        AppMachinaState.preInitQueue.push({ method: 'append', args: [k, v] });
+      }
+      return;
+    }
+    try {
+      AppMachinaState.wasm.append(k, JSON.parse(json));
+    } catch (e) {
+      if (AppMachinaState.config && AppMachinaState.config.enable_debug) {
+        console.warn('[AppMachina] WebGL append failed:', e);
+      }
+    }
+  },
+
+  AppMachinaWebGL_Union: function (keyPtr, valuesJsonPtr) {
+    if (AppMachinaState.isShutDown) return;
+    var k = UTF8ToString(keyPtr);
+    var json = UTF8ToString(valuesJsonPtr);
+    if (!AppMachinaState.wasm) {
+      if (AppMachinaState.preInitQueue.length < AppMachinaState.PRE_INIT_MAX) {
+        var arr = [];
+        try {
+          arr = JSON.parse(json);
+        } catch (e) {}
+        AppMachinaState.preInitQueue.push({ method: 'union', args: [k, arr] });
+      }
+      return;
+    }
+    try {
+      AppMachinaState.wasm.union(k, JSON.parse(json));
+    } catch (e) {
+      if (AppMachinaState.config && AppMachinaState.config.enable_debug) {
+        console.warn('[AppMachina] WebGL union failed:', e);
+      }
+    }
+  },
+
+  AppMachinaWebGL_Unset: function (keyPtr) {
+    if (AppMachinaState.isShutDown) return;
+    var k = UTF8ToString(keyPtr);
+    if (!AppMachinaState.wasm) {
+      if (AppMachinaState.preInitQueue.length < AppMachinaState.PRE_INIT_MAX) {
+        AppMachinaState.preInitQueue.push({ method: 'unset', args: [k] });
+      }
+      return;
+    }
+    try {
+      AppMachinaState.wasm.unset(k);
+    } catch (e) {
+      if (AppMachinaState.config && AppMachinaState.config.enable_debug) {
+        console.warn('[AppMachina] WebGL unset failed:', e);
+      }
+    }
+  },
+
+  // ── Tier 1: Identity reset + ID accessors ─────────────────────────────
+
+  AppMachinaWebGL_Reset: function () {
+    if (AppMachinaState.isShutDown) return;
+    if (!AppMachinaState.wasm) {
+      if (AppMachinaState.preInitQueue.length < AppMachinaState.PRE_INIT_MAX) {
+        AppMachinaState.preInitQueue.push({ method: 'reset', args: [] });
+      }
+      return;
+    }
+    try {
+      AppMachinaState.wasm.reset();
+    } catch (e) {
+      if (AppMachinaState.config && AppMachinaState.config.enable_debug) {
+        console.warn('[AppMachina] WebGL reset failed:', e);
+      }
+    }
+  },
+
+  AppMachinaWebGL_GetDeviceId: function () {
+    if (!AppMachinaState.wasm) return 0;
+    try {
+      var v = AppMachinaState.wasm.getDeviceId();
+      if (v == null) return 0;
+      return AppMachinaAllocString(v);
+    } catch (e) {
+      return 0;
+    }
+  },
+
+  AppMachinaWebGL_GetAnonymousId: function () {
+    if (!AppMachinaState.wasm) return 0;
+    try {
+      var v = AppMachinaState.wasm.getAnonymousId();
+      if (v == null) return 0;
+      return AppMachinaAllocString(v);
+    } catch (e) {
+      return 0;
+    }
+  },
+
+  AppMachinaWebGL_GetSessionNumber: function () {
+    if (!AppMachinaState.wasm) return 0;
+    try {
+      return AppMachinaState.wasm.getSessionNumber() >>> 0;
+    } catch (e) {
+      return 0;
+    }
+  },
+
+  AppMachinaWebGL_GetFirstOpenTime: function () {
+    if (!AppMachinaState.wasm) return 0;
+    try {
+      var v = AppMachinaState.wasm.getFirstOpenTime();
+      if (v == null) return 0;
+      return AppMachinaAllocString(v);
+    } catch (e) {
+      return 0;
+    }
+  },
+
+  // ── Tier 4: Feature flags ─────────────────────────────────────────────
+  //
+  // Forward to the WASM core's feature flag APIs (camelCase per
+  // wasm-bindgen). All return JSON-encoded strings so the C# side has the
+  // same contract as the C ABI native path. When WASM isn't ready yet the
+  // accessors return "null" rather than queueing — flag reads are
+  // intentionally fail-closed and synchronous (consumer code wants to
+  // branch on the value, not await it).
+
+  AppMachinaWebGL_GetFeatureFlag: function (flagKeyPtr) {
+    if (!AppMachinaState.wasm) return AppMachinaAllocString('null');
+    var key = UTF8ToString(flagKeyPtr);
+    try {
+      var v = AppMachinaState.wasm.getFeatureFlag(key);
+      // wasm-bindgen returns a JS value (string | bool | null).
+      return AppMachinaAllocString(JSON.stringify(v == null ? null : v));
+    } catch (e) {
+      if (AppMachinaState.config && AppMachinaState.config.enable_debug) {
+        console.warn('[AppMachina] getFeatureFlag failed:', e);
+      }
+      return AppMachinaAllocString('null');
+    }
+  },
+
+  AppMachinaWebGL_IsFeatureEnabled: function (flagKeyPtr) {
+    if (!AppMachinaState.wasm) return -1;
+    var key = UTF8ToString(flagKeyPtr);
+    try {
+      return AppMachinaState.wasm.isFeatureEnabled(key) ? 1 : 0;
+    } catch (e) {
+      return -1;
+    }
+  },
+
+  AppMachinaWebGL_GetFeatureFlagPayload: function (flagKeyPtr) {
+    if (!AppMachinaState.wasm) return AppMachinaAllocString('null');
+    var key = UTF8ToString(flagKeyPtr);
+    try {
+      var p = AppMachinaState.wasm.getFeatureFlagPayload(key);
+      return AppMachinaAllocString(JSON.stringify(p == null ? null : p));
+    } catch (e) {
+      if (AppMachinaState.config && AppMachinaState.config.enable_debug) {
+        console.warn('[AppMachina] getFeatureFlagPayload failed:', e);
+      }
+      return AppMachinaAllocString('null');
+    }
+  },
+
+  AppMachinaWebGL_GetAllFlagsJson: function () {
+    if (!AppMachinaState.wasm) return AppMachinaAllocString('{}');
+    try {
+      var v = AppMachinaState.wasm.getAllFlags();
+      return AppMachinaAllocString(JSON.stringify(v || {}));
+    } catch (e) {
+      return AppMachinaAllocString('{}');
+    }
+  },
+
+  AppMachinaWebGL_ReloadFeatureFlags: function () {
+    if (!AppMachinaState.wasm) return -1;
+    try {
+      return AppMachinaState.wasm.reloadFeatureFlags() ? 1 : 0;
+    } catch (e) {
+      return -1;
+    }
+  },
+
+  AppMachinaWebGL_SetPersonPropertiesForFlags: function (propertiesJsonPtr) {
+    if (AppMachinaState.isShutDown) return;
+    var propsJson = UTF8ToString(propertiesJsonPtr);
+    if (!AppMachinaState.wasm) {
+      if (AppMachinaState.preInitQueue.length < AppMachinaState.PRE_INIT_MAX) {
+        var props = {};
+        try {
+          props = JSON.parse(propsJson);
+        } catch (e) {}
+        AppMachinaState.preInitQueue.push({
+          method: 'setPersonPropertiesForFlags',
+          args: [props]
+        });
+      }
+      return;
+    }
+    try {
+      AppMachinaState.wasm.setPersonPropertiesForFlags(JSON.parse(propsJson));
+    } catch (e) {
+      if (AppMachinaState.config && AppMachinaState.config.enable_debug) {
+        console.warn('[AppMachina] setPersonPropertiesForFlags failed:', e);
+      }
+    }
+  },
+
+  AppMachinaWebGL_SetFeatureFlagBootstrap: function (bootstrapJsonPtr) {
+    if (AppMachinaState.isShutDown) return;
+    var bootstrapJson = UTF8ToString(bootstrapJsonPtr);
+    if (!AppMachinaState.wasm) {
+      if (AppMachinaState.preInitQueue.length < AppMachinaState.PRE_INIT_MAX) {
+        var data = {};
+        try {
+          data = JSON.parse(bootstrapJson);
+        } catch (e) {}
+        AppMachinaState.preInitQueue.push({
+          method: 'setFeatureFlagBootstrap',
+          args: [data]
+        });
+      }
+      return;
+    }
+    try {
+      AppMachinaState.wasm.setFeatureFlagBootstrap(JSON.parse(bootstrapJson));
+    } catch (e) {
+      if (AppMachinaState.config && AppMachinaState.config.enable_debug) {
+        console.warn('[AppMachina] setFeatureFlagBootstrap failed:', e);
+      }
+    }
   }
 };
 
@@ -1295,5 +2023,12 @@ autoAddDeps(AppMachinaWebGLPlugin, '$AppMachinaBuildDeepLinkProps');
 autoAddDeps(AppMachinaWebGLPlugin, '$AppMachinaTrackDeepLink');
 autoAddDeps(AppMachinaWebGLPlugin, '$AppMachinaSetupSpaListeners');
 autoAddDeps(AppMachinaWebGLPlugin, '$AppMachinaCleanupSpaListeners');
+// Tier 5/6 helpers
+autoAddDeps(AppMachinaWebGLPlugin, '$AppMachinaTruncate');
+autoAddDeps(AppMachinaWebGLPlugin, '$AppMachinaCoerceRejection');
+autoAddDeps(AppMachinaWebGLPlugin, '$AppMachinaTrackException');
+autoAddDeps(AppMachinaWebGLPlugin, '$AppMachinaSetupExceptionListeners');
+autoAddDeps(AppMachinaWebGLPlugin, '$AppMachinaCleanupExceptionListeners');
+autoAddDeps(AppMachinaWebGLPlugin, '$AppMachinaEmitNavTiming');
 
 mergeInto(LibraryManager.library, AppMachinaWebGLPlugin);
